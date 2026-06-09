@@ -1,0 +1,15 @@
+name: daily ghcr.io image cleanup
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          owner: w1700k
+          packages: builds
