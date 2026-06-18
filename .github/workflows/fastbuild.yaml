@@ -1,4 +1,4 @@
-name: xr1710g-oc
+name: fastbuild ubi2-oc, ubi2, snapshot, xr1710g-oc
 on: workflow_dispatch
 permissions: {contents: write, packages: write, actions: write}
 env:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
-      matrix: {target: [ubi2-oc, ubi2, SNAPSHOT]}
+      matrix: {target: [xr1710g-oc]}
     defaults:
       run:
         shell: bash -eo pipefail {0}
