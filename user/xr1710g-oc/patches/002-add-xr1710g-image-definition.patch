@@ -1,4 +1,3 @@
-```patch
 --- a/target/linux/airoha/image/an7581.mk
 +++ b/target/linux/airoha/image/an7581.mk
 @@ -120,6 +120,37 @@
@@ -37,4 +36,4 @@
  define Device/nokia_valyrian
    DEVICE_VENDOR := Nokia
    DEVICE_MODEL := Valyrian
-```
+
