@@ -60,7 +60,6 @@ jobs:
         exec docker exec -u 0 -i "${e[@]}" "$@"
         DKR
 
-    # ======= 修复 4：展开高危单行脚本，彻底解决 unexpected end of file 语法报错 =======
     - name: Prepare builder container
       run: |
         IMG_BASE="ghcr.io/${{ github.repository_owner }}/$CID:${{ matrix.target }}"
@@ -118,7 +117,7 @@ jobs:
           fc=feeds.conf
           [ -f $bp/files/$fc ] && cp $bp/files/$fc $fc && cp $fc /tmp/feeds.bak
           
-          # ======= [修复 1] 注入 Nikki 的官方软件源 =======
+          # ======= [模块 1] 注入 Nikki 的官方软件源 =======
           echo "src-git nikki_src https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
 
           ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
@@ -126,10 +125,13 @@ jobs:
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           cp $bp/config.diff .config
           
-          # ======= [修复 2] 降频逻辑：全局扫描并将 1400MHz 降至 1300MHz =======
-          echo "=== Modifying CPU Overclock from 1400MHz+ to 1300MHz ==="
-          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1300000000/g" 2>/dev/null || true
-          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1300MHz/g" 2>/dev/null || true
+          # ======= [模块 2 - 定制] 强制剥离 1400MHz，平替为 1375MHz 绕过冲突 =======
+          echo "=== Replacing 1400MHz Overclock Node with 1375MHz ==="
+          # 替换设备树、超频补丁中的基础频率数值
+          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1375000000/g" 2>/dev/null || true
+          # 替换补丁中可能存在的纯文本标识，防止界面或日志残留 1400MHz 字眼
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1375MHz/g" 2>/dev/null || true
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.375GHz/g" 2>/dev/null || true
 
           echo "=== Applying patches (errors will NOT be silently ignored) ==="
           for p in $bp/patches/*.patch; do
@@ -141,7 +143,7 @@ jobs:
           [ -e $bp/files ] && cp -r $bp/files/ .
           [ -f $bp/custom.sh ] && bash $bp/custom.sh
           
-          # ======= [修复 3] 安全注入 Nikki 及其依赖 =======
+          # ======= [模块 3] 安全注入 Nikki 及其底层依赖 =======
           echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
           echo "CONFIG_PACKAGE_nikki=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
@@ -174,46 +176,4 @@ jobs:
           echo "Files in bin/targets:"
           find bin/targets/ -type f -name "*.itb" 2>/dev/null || echo "(no .itb files found)"
           echo ""
-          echo "Looking for xr1710g sysupgrade:"
-          find bin/targets/ -name "*xr1710g*sysupgrade*" 2>/dev/null || echo "(no xr1710g sysupgrade found)"
-        '
-        if ! find openwrt_bin/targets/ -name "*xr1710g*sysupgrade*" 2>/dev/null | grep -q .; then
-          echo "::error::No XR1710G sysupgrade firmware was built! Check patch application logs."
-          exit 1
-        fi
-        echo "✅ XR1710G firmware found!"
-
-    - name: Create release
-      run: |
-        sudo chown -R "$(id -u):$(id -g)" openwrt_bin
-        find -L openwrt_bin/targets/*/* -maxdepth 1 -type f -exec install -D -t firmware {} +
-        VERSION="${{ matrix.target }}_$(date +'%Y.%m.%d')_$(jq -r '.version_code' firmware/profiles.json)"
-        sed -i "s/^/    /; 1s/^/## $VERSION\n\n/" openwrt_bin/build_info
-        gh release list --json tagName --jq '.[].tagName' | grep "^${{ matrix.target }}_" | xargs -r gh release delete --cleanup-tag -y || true
-        gh release create $VERSION firmware/*sysupgrade.itb --title $VERSION --notes-file openwrt_bin/build_info
-
-    - name: Upload builder container
-      if: success()
-      run: |
-        docker_exec $CID bash -c 'cd $DK_OPENWRT && make clean && rm -rf feeds/* tmp/* && find dl -type f -mtime +30 -delete'
-        docker commit -a openwrt-fastbuild -m "Building at $(date)" $CID $IMG_INC
-        docker container rm -fv $CID
-        docker system prune -f --volumes
-        docker push $IMG_INC
-        if ((REBUILD)); then docker buildx imagetools create -t $IMG_BASE $IMG_INC; fi
-
-    - name: Delete old caches
-      if: always()
-      run: |
-        gh cache delete dlcache || true
-        gh cache delete ccache-${{ matrix.target }} || true
-
-    - name: Save dlcache
-      uses: actions/cache/save@v5
-      if: always()
-      with: {path: dlcache, key: dlcache}
-
-    - name: Save ghcache
-      uses: actions/cache/save@v5
-      if: always()
-      with: {path: ghcache, key: 'ccache-${{ matrix.target }}'}
+          echo "Looking for xr
