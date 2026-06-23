@@ -42,15 +42,18 @@ jobs:
         git clone https://github.com/luoyizhi1987/xr1710g-builds.git /tmp/xr1710g-builds
         
         cd openwrt
-        # 1. 复制并应用 patches (按照需求2)
+        # 1. 遍历并应用 patches (加入智能层级判断机制)
         if [ -d "/tmp/xr1710g-builds/user/xr1710g-oc/patches" ]; then
-          cp -r /tmp/xr1710g-builds/user/xr1710g-oc/patches/* ./ 
-          for p in *.patch; do
-            [ -f "$p" ] && patch -p1 < "$p"
+          for p in /tmp/xr1710g-builds/user/xr1710g-oc/patches/*.patch; do
+            if [ -f "$p" ]; then
+              echo "正在应用补丁: $p"
+              # 先尝试用 -p1 打补丁，如果失败了 (||) 就降级使用 -p0
+              patch -p1 < "$p" || patch -p0 < "$p" || echo "⚠️ 补丁 $p 应用失败，请检查文件冲突！"
+            fi
           done
         fi
         
-        # 2. 复制基础 config 等设置 (按照需求1)
+        # 2. 复制基础 config
         if [ -f "/tmp/xr1710g-builds/user/xr1710g-oc/.config" ]; then
           cp /tmp/xr1710g-builds/user/xr1710g-oc/.config .config
         fi
