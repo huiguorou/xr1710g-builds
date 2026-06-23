@@ -91,6 +91,7 @@ jobs:
         
         docker run -d -t --name $CID -v $PWD/user:$DK_USER -v $PWD/openwrt_bin:$DK_BIN -v $PWD/dlcache:/dlcache -v $PWD/ghcache:/ghcache --env GITHUB_ENV=$GITHUB_ENV $IMAGE
         
+        # 补全基础宿主机编译依赖，消除黄字警告
         docker_exec $CID bash -c 'sudo -E apt-get -qq update && sudo -E apt-get -qq install -y --no-upgrade build-essential clang curl flex bison g++ gawk gcc gettext git libncurses5-dev libssl-dev python3-distutils-extra rsync swig unzip zlib1g-dev file wget golang ruby libev-dev libpam0g-dev libtirpc-dev liblzma-dev libzstd-dev libsnmp-dev'
         printf '%s\n' "REBUILD=$REBUILD" "IMG_BASE=$IMG_BASE" "IMG_INC=$IMG_INC" >> $GITHUB_ENV
 
@@ -104,9 +105,6 @@ jobs:
           
           if ((! REBUILD)) && [ -d $DK_OPENWRT/.git ]; then
             cd $DK_OPENWRT
-            # 强制清空脏缓存，保证定制代码不冲突
-            git reset --hard HEAD
-            git clean -fd
           else
             mkdir -p $DK_OPENWRT/files
             cd $DK_OPENWRT
@@ -114,8 +112,7 @@ jobs:
           fi
           
           git remote set-url origin $REPO_URL 2>/dev/null || git remote add origin $REPO_URL
-          git fetch && git checkout $REPO_BRANCH
-          git reset --hard origin/$REPO_BRANCH
+          git fetch && git checkout $REPO_BRANCH && git pull --rebase
           
           { git log origin/main..$REPO_BRANCH --oneline || echo "(no commits ahead of main)"; } > files/build_info
           cp files/build_info $DK_BIN 2>/dev/null ||:
@@ -125,20 +122,25 @@ jobs:
           fc=feeds.conf
           [ -f $bp/files/$fc ] && cp $bp/files/$fc $fc && cp $fc /tmp/feeds.bak
           
-          # 这句霸道代码会覆盖 feeds.conf，所以我们的注入必须在它【之后】
           ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
           
-          # ======= [模块 1 - 修复] 绝对安全的 Nikki 软件源注入点 =======
+          # ======= [模块 1] 防重复注入 Nikki 软件源 =======
           sed -i "/nikki/d" $fc 2>/dev/null || true
-          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git" >> $fc
+          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
 
           rm -rf feeds/* 2>/dev/null; ./scripts/feeds update -a >/dev/null; ./scripts/feeds install -a
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           
-          # 还原 feeds.bak 后，再次注入，防止后续编译链找不到源
-          sed -i "/nikki/d" $fc 2>/dev/null || true
-          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git" >> $fc
-          
+          # ======= [核心修复 1] 强制拉取美化及状态面板插件 =======
+          echo "=== Cloning 3rd-party aesthetic & status plugins ==="
+          mkdir -p package/custom_apps
+          cd package/custom_apps
+          rm -rf luci-theme-argon luci-app-argon-config luci-app-soc-status
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
+          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git
+          cd ../..
+
           cp $bp/config.diff .config
           
           # ======= [模块 2] 修改默认 LAN IP 为 192.168.10.1 =======
@@ -151,7 +153,7 @@ jobs:
           find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1299MHz/g" 2>/dev/null || true
           find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.299GHz/g" 2>/dev/null || true
 
-          echo "=== Applying patches (errors will NOT be silently ignored) ==="
+          echo "=== Applying patches ==="
           for p in $bp/patches/*.patch; do
             [ -f "$p" ] || continue
             echo "--- Applying: $p ---"
@@ -162,7 +164,6 @@ jobs:
           [ -f $bp/custom.sh ] && bash $bp/custom.sh
           
           # ======= [模块 4] 清理幽灵依赖，消除 WARNING =======
-          echo "=== Cleaning up ghost dependencies to suppress warnings ==="
           sed -i "s/ruby\/host//g" package/boot/arm-trusted-firmware-microchipsw/Makefile 2>/dev/null || true
           sed -i "s/+libev//g" package/utils/audit/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g; s/+libtirpc//g" package/utils/busybox/Makefile 2>/dev/null || true
@@ -170,35 +171,53 @@ jobs:
           sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
 
-          # ======= [模块 5 - 精装房组件] 强制开启 LuCI、监控面板与 Nikki =======
-          # 核心基础 UI 组件与中文包
-          echo "CONFIG_PACKAGE_luci=y" >> .config
-          echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          # ======= [核心修复 2] 强制写入精装配置单 =======
+          echo "=== Writing target packages to .config ==="
+          cat >> .config << "EOF"
+          # 1. 基础 UI 与主题
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_luci-app-argon-config=y
+          CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
           
-          # 颜值监控套件 (主题、SOC温度状态、CPU频率调校)
-          echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-soc-status=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y" >> .config
+          # 2. 系统状态与硬件监控
+          CONFIG_PACKAGE_luci-app-soc-status=y
+          CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y
+          CONFIG_PACKAGE_luci-app-cpufreq=y
+          CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y
           
-          # Nikki 核心及控制面板
-          echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_nikki=y" >> .config
+          # 3. 专属定制插件 (Flowsense & WiFi7 Manager)
+          CONFIG_PACKAGE_luci-app-flowsense=y
+          CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y
+          CONFIG_PACKAGE_luci-app-flowsence=y
+          CONFIG_PACKAGE_luci-app-wifi7-manager=y
+          CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y
           
-          # 底层网络组件 (TProxy与前置依赖)
-          echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
-          echo "CONFIG_PACKAGE_ip-full=y" >> .config
-          echo "CONFIG_PACKAGE_ipset=y" >> .config
-          echo "CONFIG_PACKAGE_curl=y" >> .config
+          # 4. Nikki 代理核心
+          CONFIG_PACKAGE_luci-app-nikki=y
+          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
+          CONFIG_PACKAGE_nikki=y
+          
+          # 5. Nikki 与 Tun 模式刚需的底层网络/内核模块 (完全补齐)
+          CONFIG_PACKAGE_kmod-dummy=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-netlink-diag=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_curl=y
+          EOF
 
+          # 自动解析关联依赖
           make defconfig; cat $bp/cvn.config >> .config
           ln -sf /dlcache dl 2>/dev/null
+          
+          # 核心！提前下载所有包含 UI 和 Kmod 插件在内的源码包
           make download -j8
         '
 
