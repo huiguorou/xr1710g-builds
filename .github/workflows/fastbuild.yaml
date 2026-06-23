@@ -90,7 +90,8 @@ jobs:
         fi
         
         docker run -d -t --name $CID -v $PWD/user:$DK_USER -v $PWD/openwrt_bin:$DK_BIN -v $PWD/dlcache:/dlcache -v $PWD/ghcache:/ghcache --env GITHUB_ENV=$GITHUB_ENV $IMAGE
-        docker_exec $CID bash -c 'sudo -E apt-get -qq update && sudo -E apt-get -qq install -y --no-upgrade build-essential clang curl flex bison g++ gawk gcc gettext git libncurses5-dev libssl-dev python3-distutils-extra rsync swig unzip zlib1g-dev file wget golang'
+        
+        docker_exec $CID bash -c 'sudo -E apt-get -qq update && sudo -E apt-get -qq install -y --no-upgrade build-essential clang curl flex bison g++ gawk gcc gettext git libncurses5-dev libssl-dev python3-distutils-extra rsync swig unzip zlib1g-dev file wget golang ruby libev-dev libpam0g-dev libtirpc-dev liblzma-dev libzstd-dev libsnmp-dev'
         printf '%s\n' "REBUILD=$REBUILD" "IMG_BASE=$IMG_BASE" "IMG_INC=$IMG_INC" >> $GITHUB_ENV
 
     - name: Prepare OpenWrt source
@@ -117,7 +118,7 @@ jobs:
           fc=feeds.conf
           [ -f $bp/files/$fc ] && cp $bp/files/$fc $fc && cp $fc /tmp/feeds.bak
           
-          # ======= [模块 1] 注入 Nikki 的官方软件源 =======
+          # ======= [模块 1] 注入 Nikki 软件源 =======
           echo "src-git nikki_src https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
 
           ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
@@ -125,11 +126,15 @@ jobs:
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           cp $bp/config.diff .config
           
-          # ======= [模块 2] 强制剥离 1400MHz，平替为 1375MHz 绕过冲突 =======
-          echo "=== Replacing 1400MHz Overclock Node with 1375MHz ==="
-          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1375000000/g" 2>/dev/null || true
-          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1375MHz/g" 2>/dev/null || true
-          find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.375GHz/g" 2>/dev/null || true
+          # ======= [模块 2] 修改默认 LAN IP 为 192.168.10.1 =======
+          echo "=== Changing default LAN IP to 192.168.10.1 ==="
+          sed -i "s/192\.168\.1\.1/192.168.10.1/g" package/base-files/files/bin/config_generate
+          
+          # ======= [模块 3] CPU 主频限制为 1300M (使用 1299M 防重名冲突) =======
+          echo "=== Replacing 1400MHz Overclock Node with 1299MHz (1300M equivalent) ==="
+          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1299000000/g" 2>/dev/null || true
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1299MHz/g" 2>/dev/null || true
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.299GHz/g" 2>/dev/null || true
 
           echo "=== Applying patches (errors will NOT be silently ignored) ==="
           for p in $bp/patches/*.patch; do
@@ -141,9 +146,27 @@ jobs:
           [ -e $bp/files ] && cp -r $bp/files/ .
           [ -f $bp/custom.sh ] && bash $bp/custom.sh
           
-          # ======= [模块 3] 安全注入 Nikki 及其底层依赖 =======
+          # ======= [模块 4] 清理幽灵依赖，消除 WARNING =======
+          echo "=== Cleaning up ghost dependencies to suppress warnings ==="
+          sed -i "s/ruby\/host//g" package/boot/arm-trusted-firmware-microchipsw/Makefile 2>/dev/null || true
+          sed -i "s/+libev//g" package/utils/audit/Makefile 2>/dev/null || true
+          sed -i "s/+libpam//g; s/+libtirpc//g" package/utils/busybox/Makefile 2>/dev/null || true
+          sed -i "s/+liblzma//g; s/+libzstd//g" package/boot/kexec-tools/Makefile 2>/dev/null || true
+          sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
+          sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
+
+          # ======= [模块 5] 强制开启 LuCI、Nikki 及所有必要依赖 =======
+          # 核心 Web 图形界面与中文包
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          
+          # Nikki 核心及中文控制面板
           echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_nikki=y" >> .config
+          
+          # Nikki 运行所需的底层网络组件
           echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
           echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
           echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
