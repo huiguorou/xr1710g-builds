@@ -124,22 +124,57 @@ jobs:
           
           ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
           
-          # ======= [模块 1] 防重复注入 Nikki 软件源 =======
+          # 保证系统内置的 luci 软件源不被屏蔽
+          sed -i "s/^#\(.*luci\)/\1/g" $fc 2>/dev/null || true
+          
+          # ======= [模块 1] 强制防重复注入 Nikki 软件源 =======
           sed -i "/nikki/d" $fc 2>/dev/null || true
           echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
 
           rm -rf feeds/* 2>/dev/null; ./scripts/feeds update -a >/dev/null; ./scripts/feeds install -a
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           
-          # ======= [核心修复 1] 强制拉取美化及状态面板插件 =======
-          echo "=== Cloning 3rd-party aesthetic & status plugins ==="
-          mkdir -p package/custom_apps
-          cd package/custom_apps
-          rm -rf luci-theme-argon luci-app-argon-config luci-app-soc-status
-          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git
-          cd ../..
+          # ======= [核心绝杀 1] 将第三方插件直接克隆进根部的 package 目录，贴脸强制扫描 =======
+          echo "=== Hard-cloning 3rd-party aesthetic & status plugins into package/ ==="
+          rm -rf package/luci-theme-argon package/luci-app-argon-config package/luci-app-soc-status
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git package/luci-app-soc-status
+          
+          # ======= [核心绝杀 2] 篡改系统的“祖传图纸 (config.diff)”，根源锁定精装单！ =======
+          echo "=== Hijacking master config.diff to lock down packages ==="
+          cat >> $bp/config.diff << "EOF"
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_luci-app-argon-config=y
+          CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
+          CONFIG_PACKAGE_luci-app-soc-status=y
+          CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y
+          CONFIG_PACKAGE_luci-app-cpufreq=y
+          CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y
+          CONFIG_PACKAGE_luci-app-flowsense=y
+          CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y
+          CONFIG_PACKAGE_luci-app-wifi7-manager=y
+          CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y
+          CONFIG_PACKAGE_luci-app-nikki=y
+          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
+          CONFIG_PACKAGE_nikki=y
+          CONFIG_PACKAGE_kmod-dummy=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-netlink-diag=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_curl=y
+          EOF
+          
+          # 清除重复项，防止篡改图纸引发报错
+          awk "!seen[\$0]++" $bp/config.diff > /tmp/config.diff.tmp && mv /tmp/config.diff.tmp $bp/config.diff
 
           cp $bp/config.diff .config
           
@@ -171,52 +206,10 @@ jobs:
           sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
 
-          # ======= [核心修复 2] 强制写入精装配置单 (使用 echo 彻底防空格报错) =======
-          echo "=== Writing target packages to .config ==="
-          
-          # 1. 基础 UI 与主题
-          echo "CONFIG_PACKAGE_luci=y" >> .config
-          echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-argon-config=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y" >> .config
-          
-          # 2. 系统状态与硬件监控
-          echo "CONFIG_PACKAGE_luci-app-soc-status=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y" >> .config
-          
-          # 3. 专属定制插件 (Flowsense & WiFi7 Manager)
-          echo "CONFIG_PACKAGE_luci-app-flowsense=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-flowsence=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-wifi7-manager=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y" >> .config
-          
-          # 4. Nikki 代理核心
-          echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
-          echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
-          echo "CONFIG_PACKAGE_nikki=y" >> .config
-          
-          # 5. Nikki 与 Tun 模式刚需的底层网络/内核模块 (完全补齐)
-          echo "CONFIG_PACKAGE_kmod-dummy=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-netlink-diag=y" >> .config
-          echo "CONFIG_PACKAGE_ip-full=y" >> .config
-          echo "CONFIG_PACKAGE_ipset=y" >> .config
-          echo "CONFIG_PACKAGE_curl=y" >> .config
-
           # 自动解析关联依赖
           make defconfig; cat $bp/cvn.config >> .config
           ln -sf /dlcache dl 2>/dev/null
           
-          # 核心！提前下载所有包含 UI 和 Kmod 插件在内的源码包
           make download -j8
         '
 
@@ -224,8 +217,14 @@ jobs:
       run: |
         for mode in c s; do
           docker_exec -e MODE=$mode $CID bash -c '
+            # 让系统的洗白脚本先跑
             [ -f $DK_PROFILE/pre_compile.sh ] && bash $DK_PROFILE/pre_compile.sh
             cd $DK_OPENWRT
+            
+            # ======= [核心绝杀 3] 最后一秒防线：编译前强制合并包含我们插件的主图纸！ =======
+            cat $DK_PROFILE/config.diff >> .config
+            make defconfig
+            
             export FORCE_UNSAFE_CONFIGURE=1
             make -j$(($(nproc) + 1)) V=$MODE
           ' && break
