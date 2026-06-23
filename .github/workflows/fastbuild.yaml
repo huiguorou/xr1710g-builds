@@ -125,11 +125,9 @@ jobs:
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           cp $bp/config.diff .config
           
-          # ======= [模块 2 - 定制] 强制剥离 1400MHz，平替为 1375MHz 绕过冲突 =======
+          # ======= [模块 2] 强制剥离 1400MHz，平替为 1375MHz 绕过冲突 =======
           echo "=== Replacing 1400MHz Overclock Node with 1375MHz ==="
-          # 替换设备树、超频补丁中的基础频率数值
           find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1375000000/g" 2>/dev/null || true
-          # 替换补丁中可能存在的纯文本标识，防止界面或日志残留 1400MHz 字眼
           find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1375MHz/g" 2>/dev/null || true
           find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.375GHz/g" 2>/dev/null || true
 
@@ -185,3 +183,38 @@ jobs:
           exit 1
         fi
         echo "✅ XR1710G firmware found!"
+
+    - name: Create release
+      run: |
+        sudo chown -R "$(id -u):$(id -g)" openwrt_bin
+        find -L openwrt_bin/targets/*/* -maxdepth 1 -type f -exec install -D -t firmware {} +
+        VERSION="${{ matrix.target }}_$(date +'%Y.%m.%d')_$(jq -r '.version_code' firmware/profiles.json)"
+        sed -i "s/^/    /; 1s/^/## $VERSION\n\n/" openwrt_bin/build_info
+        gh release list --json tagName --jq '.[].tagName' | grep "^${{ matrix.target }}_" | xargs -r gh release delete --cleanup-tag -y || true
+        gh release create $VERSION firmware/*sysupgrade.itb --title $VERSION --notes-file openwrt_bin/build_info
+
+    - name: Upload builder container
+      if: success()
+      run: |
+        docker_exec $CID bash -c 'cd $DK_OPENWRT && make clean && rm -rf feeds/* tmp/* && find dl -type f -mtime +30 -delete'
+        docker commit -a openwrt-fastbuild -m "Building at $(date)" $CID $IMG_INC
+        docker container rm -fv $CID
+        docker system prune -f --volumes
+        docker push $IMG_INC
+        if ((REBUILD)); then docker buildx imagetools create -t $IMG_BASE $IMG_INC; fi
+
+    - name: Delete old caches
+      if: always()
+      run: |
+        gh cache delete dlcache || true
+        gh cache delete ccache-${{ matrix.target }} || true
+
+    - name: Save dlcache
+      uses: actions/cache/save@v5
+      if: always()
+      with: {path: dlcache, key: dlcache}
+
+    - name: Save ghcache
+      uses: actions/cache/save@v5
+      if: always()
+      with: {path: ghcache, key: 'ccache-${{ matrix.target }}'}
