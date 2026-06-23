@@ -68,16 +68,16 @@ jobs:
       run: |
         cd openwrt
         
-        # 1. 设置默认 IP 为 192.168.10.1 (按照需求3)
+        # 1. 设置默认 IP 为 192.168.10.1
         sed -i 's/192.168.1.1/192.168.10.1/g' package/base-files/files/bin/config_generate
         
-        # 2. 加入 mt7996-wifi7-manager 源码 (按照需求5)
+        # 2. 加入 mt7996-wifi7-manager 源码
         git clone https://github.com/woziwrt/mt7996-wifi7-manager.git package/mt7996-wifi7-manager
         
-        # 3. 添加 Nikki (含预编译核心) 和 UI 插件
-        git clone https://github.com/sirpdboy/luci-app-nikki.git package/luci-app-nikki
+        # 3. 添加 Nikki (修复为正确的上游开源地址)
+        git clone https://github.com/nikkinikki-org/OpenWrt-nikki.git package/nikki
 
-        # 4. 追加编译模块与依赖 (Nikki内核依赖和Wifi7管理) (按照需求4)
+        # 4. 追加编译模块与依赖
         cat >> .config <<EOF
         
         # 启用 Wifi7 Manager
