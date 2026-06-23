@@ -171,47 +171,46 @@ jobs:
           sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
 
-          # ======= [核心修复 2] 强制写入精装配置单 =======
+          # ======= [核心修复 2] 强制写入精装配置单 (使用 echo 彻底防空格报错) =======
           echo "=== Writing target packages to .config ==="
-          cat >> .config << "EOF"
+          
           # 1. 基础 UI 与主题
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-base=y
-          CONFIG_PACKAGE_luci-compat=y
-          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-          CONFIG_PACKAGE_luci-app-argon-config=y
-          CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-argon-config=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y" >> .config
           
           # 2. 系统状态与硬件监控
-          CONFIG_PACKAGE_luci-app-soc-status=y
-          CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y
-          CONFIG_PACKAGE_luci-app-cpufreq=y
-          CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y
+          echo "CONFIG_PACKAGE_luci-app-soc-status=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y" >> .config
           
           # 3. 专属定制插件 (Flowsense & WiFi7 Manager)
-          CONFIG_PACKAGE_luci-app-flowsense=y
-          CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y
-          CONFIG_PACKAGE_luci-app-flowsence=y
-          CONFIG_PACKAGE_luci-app-wifi7-manager=y
-          CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y
+          echo "CONFIG_PACKAGE_luci-app-flowsense=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-flowsence=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-wifi7-manager=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y" >> .config
           
           # 4. Nikki 代理核心
-          CONFIG_PACKAGE_luci-app-nikki=y
-          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
-          CONFIG_PACKAGE_nikki=y
+          echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_nikki=y" >> .config
           
           # 5. Nikki 与 Tun 模式刚需的底层网络/内核模块 (完全补齐)
-          CONFIG_PACKAGE_kmod-dummy=y
-          CONFIG_PACKAGE_kmod-tun=y
-          CONFIG_PACKAGE_kmod-nft-tproxy=y
-          CONFIG_PACKAGE_kmod-nft-socket=y
-          CONFIG_PACKAGE_kmod-inet-diag=y
-          CONFIG_PACKAGE_kmod-netlink-diag=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_ipset=y
-          CONFIG_PACKAGE_curl=y
-          EOF
+          echo "CONFIG_PACKAGE_kmod-dummy=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-netlink-diag=y" >> .config
+          echo "CONFIG_PACKAGE_ip-full=y" >> .config
+          echo "CONFIG_PACKAGE_ipset=y" >> .config
+          echo "CONFIG_PACKAGE_curl=y" >> .config
 
           # 自动解析关联依赖
           make defconfig; cat $bp/cvn.config >> .config
