@@ -101,15 +101,22 @@ jobs:
           source $DK_PROFILE/settings.ini
           [[ $REPO_URL && $REPO_BRANCH ]] || { echo "::error::Missing REPO_URL or REPO_BRANCH"; exit 1; }
           export REPO_URL REPO_BRANCH
+          
           if ((! REBUILD)) && [ -d $DK_OPENWRT/.git ]; then
             cd $DK_OPENWRT
+            # 强制清空脏缓存，保证定制代码不冲突
+            git reset --hard HEAD
+            git clean -fd
           else
             mkdir -p $DK_OPENWRT/files
             cd $DK_OPENWRT
             git init
           fi
+          
           git remote set-url origin $REPO_URL 2>/dev/null || git remote add origin $REPO_URL
-          git fetch && git checkout $REPO_BRANCH && git pull --rebase
+          git fetch && git checkout $REPO_BRANCH
+          git reset --hard origin/$REPO_BRANCH
+          
           { git log origin/main..$REPO_BRANCH --oneline || echo "(no commits ahead of main)"; } > files/build_info
           cp files/build_info $DK_BIN 2>/dev/null ||:
           mountpoint $DK_BIN || { echo "::error::not mounted" >&2; exit 1; }
@@ -118,12 +125,20 @@ jobs:
           fc=feeds.conf
           [ -f $bp/files/$fc ] && cp $bp/files/$fc $fc && cp $fc /tmp/feeds.bak
           
-          # ======= [模块 1] 注入 Nikki 软件源 =======
-          echo "src-git nikki_src https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
-
+          # 这句霸道代码会覆盖 feeds.conf，所以我们的注入必须在它【之后】
           ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
+          
+          # ======= [模块 1 - 修复] 绝对安全的 Nikki 软件源注入点 =======
+          sed -i "/nikki/d" $fc 2>/dev/null || true
+          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git" >> $fc
+
           rm -rf feeds/* 2>/dev/null; ./scripts/feeds update -a >/dev/null; ./scripts/feeds install -a
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
+          
+          # 还原 feeds.bak 后，再次注入，防止后续编译链找不到源
+          sed -i "/nikki/d" $fc 2>/dev/null || true
+          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git" >> $fc
+          
           cp $bp/config.diff .config
           
           # ======= [模块 2] 修改默认 LAN IP 为 192.168.10.1 =======
@@ -131,7 +146,7 @@ jobs:
           sed -i "s/192\.168\.1\.1/192.168.10.1/g" package/base-files/files/bin/config_generate
           
           # ======= [模块 3] CPU 主频限制为 1300M (使用 1299M 防重名冲突) =======
-          echo "=== Replacing 1400MHz Overclock Node with 1299MHz (1300M equivalent) ==="
+          echo "=== Replacing 1400MHz Overclock Node with 1299MHz ==="
           find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1299000000/g" 2>/dev/null || true
           find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1299MHz/g" 2>/dev/null || true
           find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.299GHz/g" 2>/dev/null || true
@@ -155,23 +170,32 @@ jobs:
           sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
 
-          # ======= [模块 5] 强制开启 LuCI、Nikki 及所有必要依赖 =======
-          # 核心 Web 图形界面与中文包
+          # ======= [模块 5 - 精装房组件] 强制开启 LuCI、监控面板与 Nikki =======
+          # 核心基础 UI 组件与中文包
           echo "CONFIG_PACKAGE_luci=y" >> .config
           echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           
-          # Nikki 核心及中文控制面板
+          # 颜值监控套件 (主题、SOC温度状态、CPU频率调校)
+          echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-soc-status=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-cpufreq=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y" >> .config
+          
+          # Nikki 核心及控制面板
           echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_nikki=y" >> .config
           
-          # Nikki 运行所需的底层网络组件
+          # 底层网络组件 (TProxy与前置依赖)
           echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
           echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
           echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
           echo "CONFIG_PACKAGE_ip-full=y" >> .config
           echo "CONFIG_PACKAGE_ipset=y" >> .config
+          echo "CONFIG_PACKAGE_curl=y" >> .config
 
           make defconfig; cat $bp/cvn.config >> .config
           ln -sf /dlcache dl 2>/dev/null
