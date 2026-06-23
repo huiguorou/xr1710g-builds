@@ -171,9 +171,17 @@ jobs:
     - name: Verify firmware was built
       run: |
         echo "=== Checking for built firmware files ==="
-        docker_exec $CID bash -c '
-          cd $DK_OPENWRT
-          echo "Files in bin/targets:"
-          find bin/targets/ -type f -name "*.itb" 2>/dev/null || echo "(no .itb files found)"
-          echo ""
-          echo "Looking for xr
+        docker_exec $CID bash << 'EOF'
+        cd $DK_OPENWRT
+        echo "Files in bin/targets:"
+        find bin/targets/ -type f -name "*.itb" 2>/dev/null || echo "(no .itb files found)"
+        echo
+        echo "Looking for xr1710g sysupgrade:"
+        find bin/targets/ -name "*xr1710g*sysupgrade*" 2>/dev/null || echo "(no xr1710g sysupgrade found)"
+        EOF
+        
+        if ! find openwrt_bin/targets/ -name "*xr1710g*sysupgrade*" 2>/dev/null | grep -q .; then
+          echo "::error::No XR1710G sysupgrade firmware was built! Check patch application logs."
+          exit 1
+        fi
+        echo "✅ XR1710G firmware found!"
