@@ -91,7 +91,7 @@ jobs:
         
         docker run -d -t --name $CID -v $PWD/user:$DK_USER -v $PWD/openwrt_bin:$DK_BIN -v $PWD/dlcache:/dlcache -v $PWD/ghcache:/ghcache --env GITHUB_ENV=$GITHUB_ENV $IMAGE
         
-        # 补全基础宿主机编译依赖
+        # 补全宿主机依赖，彻底消除编译警告
         docker_exec $CID bash -c 'sudo -E apt-get -qq update && sudo -E apt-get -qq install -y --no-upgrade build-essential clang curl flex bison g++ gawk gcc gettext git libncurses5-dev libssl-dev python3-distutils-extra rsync swig unzip zlib1g-dev file wget golang ruby libev-dev libpam0g-dev libtirpc-dev liblzma-dev libzstd-dev libsnmp-dev'
         printf '%s\n' "REBUILD=$REBUILD" "IMG_BASE=$IMG_BASE" "IMG_INC=$IMG_INC" >> $GITHUB_ENV
 
@@ -105,6 +105,8 @@ jobs:
           
           if ((! REBUILD)) && [ -d $DK_OPENWRT/.git ]; then
             cd $DK_OPENWRT
+            git reset --hard HEAD
+            git clean -fd
           else
             mkdir -p $DK_OPENWRT/files
             cd $DK_OPENWRT
@@ -112,82 +114,70 @@ jobs:
           fi
           
           git remote set-url origin $REPO_URL 2>/dev/null || git remote add origin $REPO_URL
-          git fetch && git checkout $REPO_BRANCH && git pull --rebase
+          git fetch && git checkout $REPO_BRANCH
+          git reset --hard origin/$REPO_BRANCH
           
           { git log origin/main..$REPO_BRANCH --oneline || echo "(no commits ahead of main)"; } > files/build_info
           cp files/build_info $DK_BIN 2>/dev/null ||:
           mountpoint $DK_BIN || { echo "::error::not mounted" >&2; exit 1; }
           [ "$(readlink bin)" = $DK_BIN ] 2>/dev/null || { rm -rf bin; ln -sf $DK_BIN bin; }
+          
           bp="$DK_PROFILE"
           fc=feeds.conf
           [ -f $bp/files/$fc ] && cp $bp/files/$fc $fc && cp $fc /tmp/feeds.bak
           
-          ((! REBUILD)) && ./scripts/feeds list -fs > /tmp/feeds.prev 2>/dev/null && mv /tmp/feeds.prev $fc
+          # 【核心修复 1】废除霸道的静默删除，强制且透明地拉取软件源（确保 wifi7 和 flowsense 源码到位）
+          echo "=== Updating & Installing Base Feeds ==="
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
           
-          # 保证系统内置的 luci 软件源不被屏蔽
-          sed -i "s/^#\(.*luci\)/\1/g" $fc 2>/dev/null || true
-          
-          # ======= [模块 1] 强制防重复注入 Nikki 软件源 =======
-          sed -i "/nikki/d" $fc 2>/dev/null || true
-          echo "src-git nikki https://github.com/nikki-dev/openwrt-nikki.git^main" >> $fc
-
-          rm -rf feeds/* 2>/dev/null; ./scripts/feeds update -a >/dev/null; ./scripts/feeds install -a
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           
-          # ======= [核心绝杀 1] 将第三方插件直接克隆进根部的 package 目录，贴脸强制扫描 =======
-          echo "=== Hard-cloning 3rd-party aesthetic & status plugins into package/ ==="
-          rm -rf package/luci-theme-argon package/luci-app-argon-config package/luci-app-soc-status
-          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git package/luci-app-soc-status
+          # 【核心修复 2】暴力直插法：不再受制于 feeds 系统，直接把 Nikki、Argon、状态监控源码克隆进核心目录
+          echo "=== Hard-cloning 3rd-party aesthetic & status plugins into package/custom_apps ==="
+          mkdir -p package/custom_apps
+          cd package/custom_apps
+          rm -rf openwrt-nikki luci-theme-argon luci-app-argon-config luci-app-soc-status
+          git clone --depth 1 https://github.com/nikki-dev/openwrt-nikki.git
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
+          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git
+          cd ../..
           
-          # ======= [核心绝杀 2] 篡改系统的“祖传图纸 (config.diff)”，根源锁定精装单！ =======
-          # 放弃 cat >> EOF，全换成 {} 批量 echo，彻底杜绝 YAML 前导空格污染
-          echo "=== Hijacking master config.diff to lock down packages ==="
-          {
-            echo "CONFIG_PACKAGE_luci=y"
-            echo "CONFIG_PACKAGE_luci-base=y"
-            echo "CONFIG_PACKAGE_luci-compat=y"
-            echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-theme-argon=y"
-            echo "CONFIG_PACKAGE_luci-app-argon-config=y"
-            echo "CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-app-soc-status=y"
-            echo "CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-app-cpufreq=y"
-            echo "CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-app-flowsense=y"
-            echo "CONFIG_PACKAGE_luci-i18n-flowsense-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-app-wifi7-manager=y"
-            echo "CONFIG_PACKAGE_luci-i18n-wifi7-manager-zh-cn=y"
-            echo "CONFIG_PACKAGE_luci-app-nikki=y"
-            echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y"
-            echo "CONFIG_PACKAGE_nikki=y"
-            echo "CONFIG_PACKAGE_kmod-dummy=y"
-            echo "CONFIG_PACKAGE_kmod-tun=y"
-            echo "CONFIG_PACKAGE_kmod-nft-tproxy=y"
-            echo "CONFIG_PACKAGE_kmod-nft-socket=y"
-            echo "CONFIG_PACKAGE_kmod-inet-diag=y"
-            echo "CONFIG_PACKAGE_kmod-netlink-diag=y"
-            echo "CONFIG_PACKAGE_ip-full=y"
-            echo "CONFIG_PACKAGE_ipset=y"
-            echo "CONFIG_PACKAGE_curl=y"
-          } >> $bp/config.diff
+          # 【核心修复 3】无空格追加配置，严格防止 Kconfig 报错，保留原有配置不变
+          echo "=== Appending plugins to master config.diff ==="
+          cat >> $bp/config.diff << "EOF"
+CONFIG_PACKAGE_luci-theme-argon=y
+CONFIG_PACKAGE_luci-app-argon-config=y
+CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
+CONFIG_PACKAGE_luci-app-soc-status=y
+CONFIG_PACKAGE_luci-i18n-soc-status-zh-cn=y
+CONFIG_PACKAGE_luci-app-cpufreq=y
+CONFIG_PACKAGE_luci-i18n-cpufreq-zh-cn=y
+CONFIG_PACKAGE_luci-app-nikki=y
+CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
+CONFIG_PACKAGE_nikki=y
+CONFIG_PACKAGE_kmod-dummy=y
+CONFIG_PACKAGE_kmod-tun=y
+CONFIG_PACKAGE_kmod-nft-tproxy=y
+CONFIG_PACKAGE_kmod-nft-socket=y
+CONFIG_PACKAGE_kmod-inet-diag=y
+CONFIG_PACKAGE_kmod-netlink-diag=y
+EOF
           
-          # 清除重复项并去除任意可能残余的行首空格，防止篡改图纸引发报错
-          awk "!seen[\$0]++" $bp/config.diff | sed "s/^[ \t]*//g" > /tmp/config.diff.tmp && mv /tmp/config.diff.tmp $bp/config.diff
+          # 仅去除重复行，绝不去掉关键缩进
+          awk "!seen[\$0]++" $bp/config.diff > /tmp/config.diff.tmp && mv /tmp/config.diff.tmp $bp/config.diff
 
           cp $bp/config.diff .config
           
-          # ======= [模块 2] 修改默认 LAN IP 为 192.168.10.1 =======
           echo "=== Changing default LAN IP to 192.168.10.1 ==="
           sed -i "s/192\.168\.1\.1/192.168.10.1/g" package/base-files/files/bin/config_generate
           
-          # ======= [模块 3] CPU 主频限制为 1300M (使用 1299M 防重名冲突) =======
-          echo "=== Replacing 1400MHz Overclock Node with 1299MHz ==="
-          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1299000000/g" 2>/dev/null || true
-          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1299MHz/g" 2>/dev/null || true
-          find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.299GHz/g" 2>/dev/null || true
+          # 1400MHz 降频平替为 1375MHz 避开重名冲突
+          echo "=== Replacing 1400MHz Overclock Node with 1375MHz ==="
+          find target/linux/ -name "*.dts*" -o -name "*.dtsi" -o -name "*.patch" | xargs sed -i "s/1400000000/1375000000/g" 2>/dev/null || true
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1400MHz/1375MHz/g" 2>/dev/null || true
+          find target/linux/ -name "*.patch" | xargs sed -i "s/1\.4GHz/1.375GHz/g" 2>/dev/null || true
 
           echo "=== Applying patches ==="
           for p in $bp/patches/*.patch; do
@@ -196,10 +186,11 @@ jobs:
             patch -d . -p0 --forward < "$p" || { echo "::error::Patch $p FAILED to apply"; exit 1; }
           done
           echo "=== All patches applied successfully ==="
+          
           [ -e $bp/files ] && cp -r $bp/files/ .
           [ -f $bp/custom.sh ] && bash $bp/custom.sh
           
-          # ======= [模块 4] 清理幽灵依赖，消除 WARNING =======
+          # 清理幽灵依赖警告
           sed -i "s/ruby\/host//g" package/boot/arm-trusted-firmware-microchipsw/Makefile 2>/dev/null || true
           sed -i "s/+libev//g" package/utils/audit/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g; s/+libtirpc//g" package/utils/busybox/Makefile 2>/dev/null || true
@@ -207,10 +198,11 @@ jobs:
           sed -i "s/+libnetsnmp//g" package/network/services/lldpd/Makefile 2>/dev/null || true
           sed -i "s/+libpam//g" package/utils/policycoreutils/Makefile 2>/dev/null || true
 
-          # 自动解析关联依赖
-          make defconfig; cat $bp/cvn.config >> .config
+          make defconfig
+          cat $bp/cvn.config >> .config
           ln -sf /dlcache dl 2>/dev/null
           
+          # 核心下载步骤，确保刚刚追加的插件全部就绪
           make download -j8
         '
 
@@ -218,14 +210,12 @@ jobs:
       run: |
         for mode in c s; do
           docker_exec -e MODE=$mode $CID bash -c '
-            # 让系统的洗白脚本先跑
+            # 让系统的 pre_compile 脚本先跑，随便它怎么折腾
             [ -f $DK_PROFILE/pre_compile.sh ] && bash $DK_PROFILE/pre_compile.sh
             cd $DK_OPENWRT
             
-            # ======= [核心绝杀 3] 最后一秒防线：编译前强制合并包含我们插件的主图纸！ =======
-            cat $DK_PROFILE/config.diff >> .config
-            # 同样防一手 pre_compile.sh 可能带来的空格缩进问题
-            sed -i "s/^[ \t]*//g" .config
+            # 【核心修复 4】编译前的最后 1 秒，强行盖印章！不管前面谁动了配置文件，这一步强行锁死！
+            cp $DK_PROFILE/config.diff .config
             make defconfig
             
             export FORCE_UNSAFE_CONFIGURE=1
