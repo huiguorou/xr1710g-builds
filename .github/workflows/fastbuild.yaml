@@ -132,17 +132,22 @@ jobs:
           
           [ -f /tmp/feeds.bak ] && mv /tmp/feeds.bak $fc
           
-          echo "=== Hard-cloning 3rd-party aesthetic & status plugins into package/custom_apps ==="
-          mkdir -p package/custom_apps
-          cd package/custom_apps
-          rm -rf openwrt-nikki luci-theme-argon luci-app-argon-config luci-app-soc-status
-          git clone --depth 1 https://github.com/nikki-dev/openwrt-nikki.git
-          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git
-          cd ../..
+          # ======= [模块 1] 强制平铺克隆第三方美化与状态插件 =======
+          echo "=== Hard-cloning 3rd-party aesthetic & status plugins into package/ ==="
+          rm -rf package/luci-theme-argon package/luci-app-argon-config package/luci-app-soc-status
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+          git clone --depth 1 https://github.com/sirpdboy/luci-app-soc-status.git package/luci-app-soc-status
           
-          # 【绝对防弹的写入方式】兼顾 YAML 缩进，且确保输入文件的行首绝对没有空格
+          # ======= [核心修复 1] 解包释放法：剥离 Nikki 目录套娃，平铺至 package/ 根目录确保100%扫描 =======
+          echo "=== Fetching & Extracting Nikki Packages to package/ ==="
+          rm -rf /tmp/openwrt-nikki package/nikki package/luci-app-nikki
+          git clone --depth 1 https://github.com/nikki-dev/openwrt-nikki.git /tmp/openwrt-nikki
+          mv /tmp/openwrt-nikki/nikki package/
+          mv /tmp/openwrt-nikki/luci-app-nikki package/
+          rm -rf /tmp/openwrt-nikki
+          
+          # ======= [模块 2] 无空格追加配置至主图纸 =======
           echo "=== Appending plugins to master config.diff ==="
           {
             echo "CONFIG_PACKAGE_luci-theme-argon=y"
@@ -204,7 +209,7 @@ jobs:
             [ -f $DK_PROFILE/pre_compile.sh ] && bash $DK_PROFILE/pre_compile.sh
             cd $DK_OPENWRT
             
-            # 【终极防线】编译前强行再补一刀配置，无论如何都不可能变成毛坯房！
+            # ======= [核心修复 2] 编译前最后1秒强制补刀，将平铺出来的组件彻底钉死在配置单中 =======
             echo "=== Final enforcing of custom packages ==="
             {
               echo "CONFIG_PACKAGE_luci-theme-argon=y"
